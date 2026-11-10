@@ -1,0 +1,121 @@
+name: buildapk
+
+# 无 Gradle 的 APK 构建
+# 用 runner 预装的 Android SDK，只跑 aapt2 / javac / d8 / apksigner
+# 构建产物随 workflow 的 artifact 一起发布，release 由 tag 触发
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 取源码
+        uses: actions/checkout@v4
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 定位 Android SDK
+        id: sdk
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "候选 SDK 目录 $SDK"
+          # runner 镜像自带的 platform 版本会变，缺 33 就现场装一个
+          if [ ! -f "$SDK/platforms/android-33/android.jar" ]; then
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+              --install "platforms;android-33" "build-tools;34.0.0" >/dev/null || true
+          fi
+          if [ ! -f "$SDK/platforms/android-33/android.jar" ]; then
+            echo "无法获得 android-33，改用现成任一 platform"
+            JAR="$(ls -1 "$SDK"/platforms/*/android.jar 2>/dev/null | head -1 || true)"
+          else
+            JAR="$SDK/platforms/android-33/android.jar"
+          fi
+          test -n "$JAR" || { echo "没有 android.jar"; exit 1; }
+          echo "jar=$JAR" >> "$GITHUB_OUTPUT"
+          echo "用 $JAR"
+
+      - name: 对齐工具加入 PATH
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          BT="$(ls -1d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1 || true)"
+          echo "build-tools $BT"
+          if [ -n "$BT" ]; then echo "$BT" >> "$GITHUB_PATH"; fi
+
+      - name: 构建 APK
+        env:
+          ANDROIDJAR: ${{ steps.sdk.outputs.jar }}
+        run: |
+          set -euo pipefail
+          bash scripts/buildapk.sh
+          cat build/verify.txt
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemhelperprobe-debug-apk
+          path: |
+            build/systemhelperprobe-debug.apk
+            build/systemhelperprobe-debug.apk.sha256
+            build/verify.txt
+
+      - name: 写入构建摘要
+        run: |
+          set -euo pipefail
+          JAR="${{ steps.sdk.outputs.jar }}"
+          {
+            echo "构建完成"
+            echo
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| android.jar | \`$(basename "$(dirname "$JAR")")\` |"
+            echo "| 大小 | $(wc -c < build/systemhelperprobe-debug.apk) 字节 |"
+            echo "| sha256 | \`$(cut -d' ' -f1 build/systemhelperprobe-debug.apk.sha256)\` |"
+            echo "| 签名 | $(grep -m1 'Signer' build/verify.txt | sed 's/^ *//') |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    # 打 tag 时把同一份产物挂到 release 上
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 取产物
+        uses: actions/download-artifact@v4
+        with:
+          name: systemhelperprobe-debug-apk
+          path: dist
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "SystemHelper Binder PoC ${GITHUB_REF_NAME}" \
+            --notes "无 Gradle 构建的 PoC APK，sha256 见同名 .sha256 文件" \
+            dist/systemhelperprobe-debug.apk \
+            dist/systemhelperprobe-debug.apk.sha256 \
+            dist/verify.txt

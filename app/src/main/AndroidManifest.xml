@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PoC 应用的清单
+  只需要 INTERNET 打本地 socket，不需要任何敏感权限
+  queries 声明目标包，供 resolveService 与 getPackageInfo 使用
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.poc.syshelperprobe"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="33" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <queries>
+        <package android:name="com.mobiletools.systemhelper" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="SystemHelper Binder PoC"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name="dev.poc.syshelperprobe.mainactivity"
+            android:exported="true"
+            android:label="SystemHelper Binder PoC">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
